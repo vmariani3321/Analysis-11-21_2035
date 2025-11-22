@@ -197,16 +197,21 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
             outputs = model(chunk_ids) # Forward passes tensor through transformer model, including context window
             rel_len = target_end - target_start # Excludes context window from logit calculation
 
-            chunk_logits = torch.log_softmax(outputs.logits[:, -rel_len:, :], dim = -1).to(torch.float16).cpu().squeeze(0) # Converts raw probability scores into log-probabilities and pushes result to system RAM at half-precision (for speed)
+            chunk_logits = torch.log_softmax(outputs.logits[:, -rel_len:, :], dim = -1) # Converts raw probability scores into log-probabilities in a 3D tensor
 
-        target_ids = input_tensor[target_start:target_end] # Gathers the actual words that appear in the text
+            target_ids = input_tensor[target_start:target_end].unsqueeze(0).unsqueeze(-1) # Gathers the actual words that appear in the text and converts into a 3D tensor
 
-        for j, token_id in enumerate(target_ids):
+            gathered = torch.gather(chunk_logits, dim = 2, index = target_ids) # Gathers only the probabilities for the actual words of the text
 
-            val = -chunk_logits[j, token_id.item()].item() / math.log(2) # Takes the probabilities for the actual words in the text and converts them to surprisals
-            all_surprisals.append(val) # Append to surprisals list
+            final_probs = gathered.squeeze().to(torch.float16).cpu() # Converts probabilities into a 1D tensor at half-precision and pushes to CPU
 
-        del chunk_ids, outputs, chunk_logits # Cleanup
+            surprisals = (-final_probs / math.log(2)) # Converts probabilities to surprisal
+
+            all_surprisals.extend(surprisals.tolist())
+
+
+
+        del chunk_ids, outputs, chunk_logits, target_ids, gathered, final_probs # Cleanup
 
         if i % (BATCH * 10) == 0:
             empty_gpu_cache()
@@ -219,8 +224,7 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
     
     # Safety check
     if len(all_surprisals) != total_tokens:
-        # This handles the rare edge case where the loop offset is off by 1 (start token)
-        # usually not an issue with this logic, but good for stability
+        # A debug warning
         print(f"Warning: Token count mismatch. Exp: {total_tokens}, Got: {len(all_surprisals)}")
 
     current_surprisal_idx = 0 # Start at 0
