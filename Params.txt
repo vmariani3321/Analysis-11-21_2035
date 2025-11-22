@@ -1,0 +1,6 @@
+BATCH = 8192
+CONTEXT = 2048
+
+Models:
+    SpaCy : en_core_web_trf
+    LLaMa : LLaMa 3.2 1B
