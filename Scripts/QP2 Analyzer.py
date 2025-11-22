@@ -124,7 +124,7 @@ def XML_tupler(filepath):
         print(f" Parse error {e}. Skipping file.")
         return []
 
-    for modality, tag_type in [("spoken", ".//u"), ("written", ".//p")]: # Determines written/spoken modality
+    for modality, tag_type in [("written", ".//p")]: # Filters for written modality. Add ("spoken", ".//u") to also get spoken
             for element in root.findall(tag_type):
                 for sentence_tag in element.findall(".//s"): # Extracts sentences
                     words = [
@@ -161,11 +161,14 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
 
     flat_input_ids = [] # Single stream of tokenized sentences
     all_bounds = [] # List of sentence boundaries
-    eos_id = tokenizer.eos_token_id # Sentence separator token
+    sep_id = tokenizer.encode(" ", add_special_tokens = False)[0] # Sentence separator token (A space, so that an EOS token doesn't limit context)
 
-    for sent_ids in encodings['input_ids']: # For each encoded sentence:
-        flat_input_ids.extend(sent_ids + [eos_id]) # Add sentence and boundary to single stream of encoded text
-        all_bounds.append(len(flat_input_ids) - 1) # Catalogue the position of the EOS token
+    for i, sent_ids in enumerate(encodings['input_ids']): # For each enumerated encoded sentence
+        if i == 0: # If the first sentence
+            flat_input_ids.extend(sent_ids) # Add sentence to sentence stream
+        else: #If not first sentence
+            flat_input_ids.extend([sep_id] + sent_ids) # Add a leading space and the sentence to the stream
+        all_bounds.append(len(flat_input_ids)-1) # Catalogue sentence boundaries
 
     total_tokens = len(flat_input_ids)
 
