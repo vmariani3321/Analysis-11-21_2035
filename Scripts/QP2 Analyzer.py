@@ -605,8 +605,8 @@ def analyze(inputDir, outputDir, spacy_model, hf_model, overwrite = 0):
 if __name__ == "__main__":
 
 
-    analyze("C:/Users/vmari/OneDrive/Documents/0 RESEARCH/BNC Data QP2/BNCFiles/Full BNC1994/Download/Texts", 
-            "D:/BNC1120/CSV", 
+    analyze("D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts", 
+            "D:/BNC Full Data/11-22_2PM Run/CSV",
             "en_core_web_trf", 
             "meta-llama/Llama-3.2-1B", 
             overwrite=0
