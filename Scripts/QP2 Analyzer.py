@@ -175,8 +175,8 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
     all_surprisals = []
 
 
-    BATCH = 8192 # Number of tokens to calculate surprisals at once for
-    CONTEXT_WIN = 2048 # Amount of previous context to take into account for (in addition to current batch)
+    BATCH = 16384 # Number of tokens to calculate surprisals at once for
+    CONTEXT_WIN = 1024 # Amount of previous context to take into account for (in addition to current batch)
 
     input_tensor = torch.tensor(flat_input_ids, device=accelerator.device) # Transforms sentence string into a 1D tensor
 
@@ -606,7 +606,7 @@ if __name__ == "__main__":
 
 
     analyze("D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts", 
-            "D:/BNC Full Data/11-22_2PM Run/CSV",
+            "D:/BNC Full Data/11-22_2PM2 Run/CSV",
             "en_core_web_trf", 
             "meta-llama/Llama-3.2-1B", 
             overwrite=0
