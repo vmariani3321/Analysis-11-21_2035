@@ -17,6 +17,17 @@ from spacy.tokens import Doc
 
 
 ############################
+# CONFIG
+############################
+BATCH = 16384 # Number of tokens to calculate surprisals for at once
+CONTEXT_WIN = 1024 # Amount of previous context to take into account (in addition to current batch)
+OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
+INPUT_DIR = "D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts" # The directory of the input XML files
+OUTPUT_DIR = "D:/BNC Full Data/11-22_2PM2 Run/CSV" # The directory of the output CSV files
+SPACY_MOD = "en_core_web_trf" # The SpaCy model to use
+TRANSFORMER_MOD = "meta-llama/Llama-3.2-1B" # The transformer model to use
+
+############################
 # HELPERS
 ############################
 
@@ -174,9 +185,6 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
 
     all_surprisals = []
 
-
-    BATCH = 16384 # Number of tokens to calculate surprisals at once for
-    CONTEXT_WIN = 1024 # Amount of previous context to take into account for (in addition to current batch)
 
     input_tensor = torch.tensor(flat_input_ids, device=accelerator.device) # Transforms sentence string into a 1D tensor
 
