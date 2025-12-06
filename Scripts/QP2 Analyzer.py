@@ -1,3 +1,6 @@
+# v. 12.6.25
+
+
 #############################
 # IMPORTS
 #############################
@@ -19,11 +22,12 @@ from spacy.tokens import Doc
 ############################
 # CONFIG
 ############################
-BATCH = 16384 # Number of tokens to calculate surprisals for at once
-CONTEXT_WIN = 1024 # Amount of previous context to take into account (in addition to current batch)
+BATCH = 512 # Number of sentences to calculate surprisals for at once
+CONTEXT = 32 # Amount of previous sentences to take into account (in addition to current batch)
+TOKEN_LIM = 16384 # Number of tokens to concurrently process; higher = faster, but more memory use
 OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
 INPUT_DIR = "D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts" # The directory of the input XML files
-OUTPUT_DIR = "D:/BNC Full Data/11-22_2PM2 Run/CSV" # The directory of the output CSV files
+OUTPUT_DIR = "D:/BNC Full Data/12-6 Test/CSV" # The directory of the output CSV files
 SPACY_MOD = "en_core_web_trf" # The SpaCy model to use
 TRANSFORMER_MOD = "meta-llama/Llama-3.2-1B" # The transformer model to use
 
@@ -158,107 +162,107 @@ def XML_tupler(filepath):
 
     return sentence_tuples
 
-def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
-    """
-    Calculates surprisals for a set of sentences using a sliding window approach.
-    """
 
-    # Preparation #
-
-    sentences = [sent[0] for sent in sentence_tuples] # Takes sentence_text from (sentence_text, metadata) tuple
-    sentence_metadata = [sent[1] for sent in sentence_tuples] # ibid for metadata
-
-    encodings = tokenizer(sentences, add_special_tokens = False) # Encodes sentences
-
-    flat_input_ids = [] # Single stream of tokenized sentences
-    all_bounds = [] # List of sentence boundaries
-    sep_id = tokenizer.encode(" ", add_special_tokens = False)[0] # Sentence separator token (A space, so that an EOS token doesn't limit context)
-
-    for i, sent_ids in enumerate(encodings['input_ids']): # For each enumerated encoded sentence
-        if i == 0: # If the first sentence
-            flat_input_ids.extend(sent_ids) # Add sentence to sentence stream
-        else: #If not first sentence
-            flat_input_ids.extend([sep_id] + sent_ids) # Add a leading space and the sentence to the stream
-        all_bounds.append(len(flat_input_ids)-1) # Catalogue sentence boundaries
-
-    total_tokens = len(flat_input_ids)
+def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
 
     all_surprisals = []
+    
+    sentences = [sent[0] for sent in sentence_tuples]
+    sentence_metadata = [sent[1] for sent in sentence_tuples]
 
+    batch_start = batch_num * BATCH
+    batch_end = min(((batch_num * BATCH) + BATCH), len(sentences))
+    context_start = max(0, (batch_start - CONTEXT))
 
-    input_tensor = torch.tensor(flat_input_ids, device=accelerator.device) # Transforms sentence string into a 1D tensor
+    batchContext_sents = sentences[context_start:batch_end]
 
-    # Calculation #
+    surprisal_start = batch_start - context_start
 
-    for i in tqdm(range(0, total_tokens, BATCH), desc = "LLM Calculation", position = 1, leave = False): # Takes i, the number of total tokens, skipping by BATCH size
+    sentence_token_ids_list = []
+    sentence_bounds = []
 
-        target_start = i # Beginning of batch
-        target_end = min(i + BATCH, total_tokens) # End of batch (or end of tensor)
+    bos = tokenizer.bos_token
+    separator = " "
 
-        context_start = max(0, target_start - CONTEXT_WIN) # Beginning of previous batch context window (Or beginning of tensor)
+    current_token_count = 0
+    batch_start_token = 0
 
-        chunk_ids = input_tensor[context_start:target_end].unsqueeze(0).to(accelerator.device)
+    for idx, sentence in enumerate(batchContext_sents):
+        if idx == 0: # if the first sentence
+            current_sentence = bos + sentence # BOS+sentence with no leading space
+        else:
+            current_sentence = separator + sentence # space+sentence
 
+        sentence_token_ids = tokenizer(current_sentence, add_special_tokens = False)['input_ids'] # Tokenize now to force alignment of space as leading rather than trailing
 
-        with torch.no_grad(): # With inference mode (i.e., w/out saving calculation steps to memory):
+        if idx == surprisal_start:
+            batch_start_token = current_token_count # Catalogues token idx of first token in the first sentence of the batch
+        
+        current_token_count += len(sentence_token_ids)
+        sentence_bounds.append(current_token_count)
+        sentence_token_ids_list.append(sentence_token_ids) # Creates a list of lists of tokens for sentences
 
-            outputs = model(chunk_ids) # Forward passes tensor through transformer model, including context window
-            rel_len = target_end - target_start # Excludes context window from logit calculation
+    flattened_token_ids = [token_id for sentence in sentence_token_ids_list for token_id in sentence]
+    # Equivalent to but faster than:
+    #
+    #for sentence in sentence_token_ids_list:
+    #   for token_id in sentence:
+    #       flattened_token_ids.append(token_id)
 
-            chunk_logits = torch.log_softmax(outputs.logits[:, -rel_len:, :], dim = -1) # Converts raw probability scores into log-probabilities in a 3D tensor
+    flattened_token_ids_len = len(flattened_token_ids)
 
-            target_ids = input_tensor[target_start:target_end].unsqueeze(0).unsqueeze(-1) # Gathers the actual words that appear in the text and converts into a 3D tensor
+    ### CALCULATION ###
 
-            gathered = torch.gather(chunk_logits, dim = 2, index = target_ids) # Gathers only the probabilities for the actual words of the text
+    tensor = torch.tensor(flattened_token_ids, device=accelerator.device) # Creates 1D tensor of stream of text
 
-            final_probs = gathered.squeeze().to(torch.float16).cpu() # Converts probabilities into a 1D tensor at half-precision and pushes to CPU
+    tensor_len = len(tensor)
 
-            surprisals = (-final_probs / math.log(2)) # Converts probabilities to surprisal
+    for i in tqdm(range(batch_start_token, tensor_len, TOKEN_LIM), desc = "Calculating Surprisal", position = 1, leave = False):
+        target_start = i # Start of target range == current item
+        target_end = min(i + TOKEN_LIM, tensor_len) # End of target range; ensures value stays w/in tensor
+        target_context_start = max(0, target_start - CONTEXT)
 
-            all_surprisals.extend(surprisals.tolist())
+        context_slice = tensor[target_context_start:target_end].unsqueeze(0).to(accelerator.device) # Slices tensor from beginning of context to current word
 
+        with torch.no_grad(): # With model in inference mode
 
+            forward_pass_outputs = model(context_slice) # Forward pass through model
+            relevant_length = target_end - target_start # Prevents entirely recalculating context window
+            context_slice_logits = torch.log_softmax(forward_pass_outputs.logits[:, -relevant_length:, :], dim = -1) # Converts raw probability into log probability in a 3D tensor
 
-        del chunk_ids, outputs, chunk_logits, target_ids, gathered, final_probs # Cleanup
+            target_words = tensor[target_start:target_end].unsqueeze(0).unsqueeze(-1) # Gathers words from the text and converts to a 3D tensor
+            gathered_probabilities = torch.gather(context_slice_logits, dim = 2, index = target_words) # Gathers only the probabilities of the words in the text
+            final_probabilities = gathered_probabilities.squeeze().to(torch.float16).cpu() # Converts probabilities to 1D tensor at half precision and sends to CPU
 
-        if i % (BATCH * 10) == 0:
-            empty_gpu_cache()
-            gc.collect()
+            surprisal = (-final_probabilities / math.log(2)) # Converts probability into surprisal
 
+            all_surprisals.extend(surprisal.tolist())
 
-    # Saving to output tuples #
+        del context_slice, forward_pass_outputs, context_slice_logits, target_words, gathered_probabilities, final_probabilities
 
     final_results = []
-    
-    # Safety check
-    if len(all_surprisals) != total_tokens:
-        # A debug warning
-        print(f"Warning: Token count mismatch. Exp: {total_tokens}, Got: {len(all_surprisals)}")
 
-    current_surprisal_idx = 0 # Start at 0
-    
-    for i, end_token_idx in enumerate(all_bounds):
-        # Calculate the length of the current sentence
-        prev_bound = all_bounds[i-1] if i > 0 else -1
-        n_tokens = end_token_idx - prev_bound
-        
-        # Slice the big list
-        sent_surps = all_surprisals[current_surprisal_idx : current_surprisal_idx + n_tokens] # Take surprisals from the sentence
-        current_surprisal_idx += n_tokens # Increment the index counter
+    current_surprisal_idx = 0
 
-        result_tuple = ( # Place results in a (text, meta, surprisal) tuple
+    for i, boundary in enumerate(sentence_bounds):
+        previous_bound = sentence_bounds[i-1] if i > 0 else -1
+        n_tokens = boundary - previous_bound
+
+        sent_surps = all_surprisals[current_surprisal_idx : current_surprisal_idx + n_tokens]
+        current_surprisal_idx += n_tokens
+
+        result_tuple = (
             sentences[i],
-            sentence_metadata[i],
+            sentence_metadata[1],
             sent_surps
         )
-        final_results.append(result_tuple) # Append to list of tuples
 
-    # Final Cleanup #
+        final_results.append(result_tuple)
 
-    del input_tensor, flat_input_ids, all_surprisals
+    del tensor, flattened_token_ids, all_surprisals
     gc.collect()
     empty_gpu_cache()
-    
+
     return final_results
 
 
@@ -517,13 +521,13 @@ def analysis(input,
             accelerator,
             tokenizer,
             model):
-    
+    batch_num = 0 # Batch number
     sentence_tuples = XML_tupler(input) # Outputs (text, context) tuples w/ ID numbers, filenames, and modality
 
     if not sentence_tuples:
         return
 
-    surprisal_tuples = surprisal_calc(sentence_tuples, tokenizer, model, accelerator) # Outputs (text, context, surprisal) tuples for each sentence
+    surprisal_tuples = surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num) # Outputs (text, context, surprisal) tuples for each sentence
 
     doc_stream = spacy_streamer(surprisal_tuples, nlp) # Creates stream of SpaCy docs (one per sentence) for processing
     
@@ -613,11 +617,11 @@ def analyze(inputDir, outputDir, spacy_model, hf_model, overwrite = 0):
 if __name__ == "__main__":
 
 
-    analyze("D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts", 
-            "D:/BNC Full Data/11-22_2PM2 Run/CSV",
-            "en_core_web_trf", 
-            "meta-llama/Llama-3.2-1B", 
-            overwrite=0
+    analyze(INPUT_DIR, 
+            OUTPUT_DIR,
+            SPACY_MOD, 
+            TRANSFORMER_MOD, 
+            OVERWRITE
             )
 
 
