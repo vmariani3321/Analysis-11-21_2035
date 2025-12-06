@@ -27,7 +27,7 @@ CONTEXT = 32 # Amount of previous sentences to take into account (in addition to
 TOKEN_LIM = 16384 # Number of tokens to concurrently process; higher = faster, but more memory use
 OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
 INPUT_DIR = "D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts" # The directory of the input XML files
-OUTPUT_DIR = "D:/BNC Full Data/12-6 Test/CSV" # The directory of the output CSV files
+OUTPUT_DIR = "D:/BNC Full Data/12-6_1PM Run/CSV" # The directory of the output CSV files
 SPACY_MOD = "en_core_web_trf" # The SpaCy model to use
 TRANSFORMER_MOD = "meta-llama/Llama-3.2-1B" # The transformer model to use
 
@@ -253,7 +253,7 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
 
         result_tuple = (
             sentences[i],
-            sentence_metadata[1],
+            sentence_metadata[i],
             sent_surps
         )
 
