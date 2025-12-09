@@ -17,23 +17,45 @@ import os
 import xml.etree.ElementTree as ET
 import gc
 from spacy.tokens import Doc
+import time
 
 
 ############################
 # CONFIG
 ############################
-BATCH = 512 # Number of sentences to calculate surprisals for at once
+BATCH = 550 # Number of sentences to calculate surprisals for at once
 CONTEXT = 32 # Amount of previous sentences to take into account (in addition to current batch)
 TOKEN_LIM = 16384 # Number of tokens to concurrently process; higher = faster, but more memory use
 OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
 INPUT_DIR = "D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts" # The directory of the input XML files
-OUTPUT_DIR = "D:/BNC Full Data/12-6_1PM Run/CSV" # The directory of the output CSV files
+OUTPUT_DIR = "D:/BNC Full Data/12-9_5PM Run/CSV" # The directory of the output CSV files
 SPACY_MOD = "en_core_web_trf" # The SpaCy model to use
 TRANSFORMER_MOD = "meta-llama/Llama-3.2-1B" # The transformer model to use
 
 ############################
 # HELPERS
 ############################
+def timer(start_time, end_time):
+    """
+    Times a function. Mostly used for debugging and tuning.
+    
+    For example:
+
+    start_time = time.time()
+    {some function}
+    end_time = time.time()
+
+    timer(start_time, end_time)
+
+    """
+    duration = end_time - start_time
+    hours = int(duration // 3600)
+    minutes = int((duration % 3600) // 60)
+    seconds = int(duration % 60)
+
+    hhmmss_duration = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    print(f"Total processing time: {hhmmss_duration}.")
 
 def empty_gpu_cache():
     """
@@ -151,7 +173,7 @@ def XML_tupler(filepath):
                     if words:
                         sentence_text = ' '.join(words).strip() # Joins words into a sentence with only one space between words and removes empty sentences
                         sentence_counter += 1 
-                        FSID = f"{filename_no_ext}_{sentence_counter}"  # FSID = File Sentence ID
+                        FSID = f"{filename_no_ext}_{sentence_counter:04d}"  # FSID = File Sentence ID, with leading zeroes
 
                         metadata = {
                             "FSID" : FSID,
@@ -527,24 +549,39 @@ def analysis(input,
     if not sentence_tuples:
         return
 
-    surprisal_tuples = surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num) # Outputs (text, context, surprisal) tuples for each sentence
+    total_sentences = len(sentence_tuples)
+    total_batches = math.ceil(total_sentences / BATCH)
 
-    doc_stream = spacy_streamer(surprisal_tuples, nlp) # Creates stream of SpaCy docs (one per sentence) for processing
-    
-    token_rows = [] # Holds CSV rows for each word/token
+    all_token_rows = []
 
-    for doc in tqdm(doc_stream, total=len(sentence_tuples), desc="NLP Processing", position=1, leave=False): # For each sentence
-        aligned = alignment(doc, tokenizer) # Align SpaCy and LLaMa tokens
-        token_surprisals = tokenize_surprisal(doc, aligned) # Assign surprisals to each word
-        token_rows.extend(generate_rows(doc, token_surprisals)) # Generate and attach CSV rows for each word
+    for batch_num in tqdm(range(total_batches), desc="Processing Batch", position =1, leave = False):
+        batch_start_index = batch_num * BATCH
 
-    if token_rows: # Write file to CSV
-        pd.DataFrame(token_rows).to_csv(
-            output, 
-            mode = 'w',
-            header = True,
-            index = False, 
-            encoding = 'utf-8-sig')
+        is_first_batch = (batch_num == 0)
+        file_mode = 'w' if is_first_batch else 'a'
+        write_header= is_first_batch
+        
+        surprisal_tuples = surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num) # Outputs (text, context, surprisal) tuples for each sentence
+
+        doc_stream = spacy_streamer(surprisal_tuples, nlp) # Creates stream of SpaCy docs (one per sentence) for processing
+        
+        token_rows = [] # Holds CSV rows for each word/token
+
+        for doc in tqdm(doc_stream, total=len(sentence_tuples), desc="NLP Processing", position=1, leave=False): # For each sentence
+            aligned = alignment(doc, tokenizer) # Align SpaCy and LLaMa tokens
+            token_surprisals = tokenize_surprisal(doc, aligned) # Assign surprisals to each word
+            token_rows.extend(generate_rows(doc, token_surprisals)) # Generate and attach CSV rows for each word
+
+        gc.collect()
+        empty_gpu_cache()
+
+        if token_rows: # Write file to CSV
+            pd.DataFrame(token_rows).to_csv(
+                output, 
+                mode = file_mode,
+                header = write_header,
+                index = False, 
+                encoding = 'utf-8-sig')
 
     # Cleanup #
 
@@ -616,13 +653,21 @@ def analyze(inputDir, outputDir, spacy_model, hf_model, overwrite = 0):
 
 if __name__ == "__main__":
 
+    start_time = time.time()
 
     analyze(INPUT_DIR, 
-            OUTPUT_DIR,
-            SPACY_MOD, 
-            TRANSFORMER_MOD, 
-            OVERWRITE
-            )
+        OUTPUT_DIR,
+        SPACY_MOD, 
+        TRANSFORMER_MOD, 
+        OVERWRITE
+        )
+    
+    end_time = time.time()
+
+    timer(start_time, end_time)
+
+
+
 
 
 
