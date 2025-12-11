@@ -26,9 +26,9 @@ import time
 BATCH = 1024 # Number of sentences to calculate surprisals for at once #(NOTE, No file in the BNC contains > 544 sentences.)
 CONTEXT = 32 # Amount of previous sentences to take into account (in addition to current batch)
 TOKEN_LIM = 16384 # Number of tokens to concurrently process; higher = faster, but more memory use
-OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
+OVERWRITE = 1 # Whether to clear the output directory or resume from existing files
 INPUT_DIR = "D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts" # The directory of the input XML files
-OUTPUT_DIR = "D:/BNC Full Data/12-11_9AM Run/CSV" # The directory of the output CSV files
+OUTPUT_DIR = "D:/BNC Full Data/12-11_11AM Run/CSV" # The directory of the output CSV files
 SPACY_MOD = "en_core_web_trf" # The SpaCy model to use
 TRANSFORMER_MOD = "meta-llama/Llama-3.2-1B" # The transformer model to use
 
@@ -185,6 +185,7 @@ def XML_tupler(filepath):
     return sentence_tuples
 
 
+
 def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
 
     all_surprisals = []
@@ -197,52 +198,64 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
     context_start = max(0, (batch_start - CONTEXT))
 
     batchContext_sents = sentences[context_start:batch_end]
-
     surprisal_start = batch_start - context_start
 
     sentence_token_ids_list = []
-    sentence_bounds = []
-    alignment_text = []
+    batch_targets = []
 
-    bos = tokenizer.bos_token
+    bos_id = tokenizer.bos_token_id
+    if isinstance(bos_id, list):
+        bos_id = bos_id[0]
     separator = " "
 
-    current_token_count = 0
-    batch_start_token = 0
+    batch_start_token_index = 0
 
     for idx, sentence in enumerate(batchContext_sents):
-        if idx == 0: # if the first sentence
-            current_sentence = bos + sentence # BOS+sentence with no leading space
-        else:
-            current_sentence = separator + sentence # space+sentence
+
+        if batch_num == 0 and idx == 0:
+            current_sentence = sentence
+        else: 
+            current_sentence = separator + sentence
+
+        sentence_tokenized_output = tokenizer(current_sentence, add_special_tokens = False)['input_ids'] 
+
+        if sentence_tokenized_output and isinstance(sentence_tokenized_output[0], list):
+            sentence_token_ids = [token for sentence in sentence_tokenized_output for token in sentence]
+        else: 
+            sentence_token_ids = sentence_tokenized_output
+
+        if idx == 0:
+            sentence_token_ids_list.append(bos_id)
+
         
-        alignment_text.append(current_sentence)
+        sentence_token_ids_list.extend(sentence_token_ids)
 
-        sentence_token_ids = tokenizer(current_sentence, add_special_tokens = False)['input_ids'] # Tokenize now to force alignment of space as leading rather than trailing
+        if idx >= surprisal_start:
 
-        if idx == surprisal_start:
-            batch_start_token = current_token_count # Catalogues token idx of first token in the first sentence of the batch
-        
-        current_token_count += len(sentence_token_ids)
-        sentence_bounds.append(current_token_count)
-        sentence_token_ids_list.append(sentence_token_ids) # Creates a list of lists of tokens for sentences
+            target_entry = {
+                'text' : current_sentence, 
+                'global_idx' : context_start + idx,
+                'token_len' : len(sentence_token_ids)
+            }
+            batch_targets.append(target_entry)
 
-    flattened_token_ids = [token_id for sentence in sentence_token_ids_list for token_id in sentence]
-    # Equivalent to but faster than:
-    #
-    #for sentence in sentence_token_ids_list:
-    #   for token_id in sentence:
-    #       flattened_token_ids.append(token_id)
+        if idx < surprisal_start:
+            batch_start_token_index = len(sentence_token_ids_list)
 
-    flattened_token_ids_len = len(flattened_token_ids)
+
+
+    flattened_token_ids = sentence_token_ids_list
 
     ### CALCULATION ###
 
     tensor = torch.tensor(flattened_token_ids, device=accelerator.device) # Creates 1D tensor of stream of text
-
     tensor_len = len(tensor)
 
-    for i in tqdm(range(batch_start_token, tensor_len, TOKEN_LIM), desc = "Calculating Surprisal", position = 1, leave = False):
+    target_start_offset = max(1, batch_start_token_index)
+
+
+
+    for i in tqdm(range(target_start_offset, tensor_len, TOKEN_LIM), desc = "Calculating Surprisal", position = 1, leave = False):
         target_start = i # Start of target range == current item
         target_end = min(i + TOKEN_LIM, tensor_len) # End of target range; ensures value stays w/in tensor
         target_context_start = max(0, target_start - CONTEXT)
@@ -252,35 +265,50 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
         with torch.no_grad(): # With model in inference mode
 
             forward_pass_outputs = model(context_slice) # Forward pass through model
-            relevant_length = target_end - target_start # Prevents entirely recalculating context window
-            context_slice_logits = torch.log_softmax(forward_pass_outputs.logits[:, -relevant_length:, :], dim = -1) # Converts raw probability into log probability in a 3D tensor
+            logits = forward_pass_outputs.logits
+
+        ###
+            logit_start_idx = (target_start - target_context_start) - 1
+            logit_end_idx = (target_end - target_context_start)
+
+            relevant_logits = logits[:, logit_start_idx:logit_end_idx, :]
+            log_probs = torch.log_softmax(relevant_logits, dim = -1) # Converts raw probability into log probability in a 3D tensor
+
+        ###
+
+        
 
             target_words = tensor[target_start:target_end].unsqueeze(0).unsqueeze(-1) # Gathers words from the text and converts to a 3D tensor
-            gathered_probabilities = torch.gather(context_slice_logits, dim = 2, index = target_words) # Gathers only the probabilities of the words in the text
+            gathered_probabilities = torch.gather(log_probs, dim = 2, index = target_words) # Gathers only the probabilities of the words in the text
             final_probabilities = gathered_probabilities.squeeze().to(torch.float16).cpu() # Converts probabilities to 1D tensor at half precision and sends to CPU
 
             surprisal = (-final_probabilities / math.log(2)) # Converts probability into surprisal
 
-            all_surprisals.extend(surprisal.tolist())
+            if surprisal.dim() == 0: 
+                all_surprisals.append(surprisal.item())
+            else:
+                all_surprisals.extend(surprisal.tolist())
 
-        del context_slice, forward_pass_outputs, context_slice_logits, target_words, gathered_probabilities, final_probabilities
+        del context_slice, forward_pass_outputs, relevant_logits, logits, target_words, gathered_probabilities, final_probabilities
 
     final_results = []
 
     current_surprisal_idx = 0
 
-    for i, boundary in enumerate(sentence_bounds):
-        previous_bound = sentence_bounds[i-1] if i > 0 else -1
-        n_tokens = boundary - previous_bound
+
+    for entry in batch_targets:
+        n_tokens = entry['token_len']
 
         sent_surps = all_surprisals[current_surprisal_idx : current_surprisal_idx + n_tokens]
         current_surprisal_idx += n_tokens
+        
+        global_idx = entry['global_idx']
 
-        current_metadata = sentence_metadata[i].copy()
-        current_metadata['alignment_text'] = alignment_text[i]
+        current_metadata = sentence_metadata[global_idx].copy()
+        current_metadata['alignment_text'] = entry['text']
 
         result_tuple = (
-            sentences[i],
+            sentences[global_idx],
             current_metadata,
             sent_surps
         )
@@ -330,7 +358,7 @@ def alignment(doc, tokenizer):
 
     shift_amount = len(alignment_text) - len(doc.text)
 
-    offsets = tokenizer(alignment_text, return_offsets_mapping = True)['offset_mapping'] # Gather start and end characters for each token, stripping special tokens
+    offsets = tokenizer(alignment_text, add_special_tokens = False, return_offsets_mapping = True)['offset_mapping'] # Gather start and end characters for each token, stripping special tokens
 
     spacy_spans = [(tok.idx, tok.idx + len(tok), tok) for tok in doc] # Does the same for spacy; outputs (start, end, token)
 
