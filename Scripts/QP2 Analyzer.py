@@ -23,7 +23,7 @@ import time
 ############################
 # CONFIG
 ############################
-BATCH = 550 # Number of sentences to calculate surprisals for at once
+BATCH = 550 # Number of sentences to calculate surprisals for at once #(NOTE, No file in the BNC contains > 544 sentences.)
 CONTEXT = 32 # Amount of previous sentences to take into account (in addition to current batch)
 TOKEN_LIM = 16384 # Number of tokens to concurrently process; higher = faster, but more memory use
 OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
