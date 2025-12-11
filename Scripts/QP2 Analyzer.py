@@ -186,6 +186,7 @@ def XML_tupler(filepath):
 
 
 
+
 def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
 
     all_surprisals = []
