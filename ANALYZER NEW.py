@@ -173,7 +173,7 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator):
     flat_input_ids = [] # Single stream of tokenized sentences
     all_bounds = [] # List of sentence boundaries
     sep_id = tokenizer.encode(" ", add_special_tokens = False)[0] # Sentence separator token (A space, so that an EOS token doesn't limit context)
-    bos_id = tokenizer.encode(bos_token, add_special_tokens = False)[0]
+    bos_id = tokenizer.bos_token_id
 
     for i, sent_ids in enumerate(encodings['input_ids']): # For each enumerated encoded sentence
         if i == 0: # If the first sentence

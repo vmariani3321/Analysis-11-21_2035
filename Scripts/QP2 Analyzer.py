@@ -23,12 +23,12 @@ import time
 ############################
 # CONFIG
 ############################
-BATCH = 550 # Number of sentences to calculate surprisals for at once #(NOTE, No file in the BNC contains > 544 sentences.)
+BATCH = 1024 # Number of sentences to calculate surprisals for at once #(NOTE, No file in the BNC contains > 544 sentences.)
 CONTEXT = 32 # Amount of previous sentences to take into account (in addition to current batch)
 TOKEN_LIM = 16384 # Number of tokens to concurrently process; higher = faster, but more memory use
 OVERWRITE = 0 # Whether to clear the output directory or resume from existing files
 INPUT_DIR = "D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts" # The directory of the input XML files
-OUTPUT_DIR = "D:/BNC Full Data/12-9_5PM Run/CSV" # The directory of the output CSV files
+OUTPUT_DIR = "D:/BNC Full Data/12-11_9AM Run/CSV" # The directory of the output CSV files
 SPACY_MOD = "en_core_web_trf" # The SpaCy model to use
 TRANSFORMER_MOD = "meta-llama/Llama-3.2-1B" # The transformer model to use
 
@@ -202,6 +202,7 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
 
     sentence_token_ids_list = []
     sentence_bounds = []
+    alignment_text = []
 
     bos = tokenizer.bos_token
     separator = " "
@@ -214,6 +215,8 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
             current_sentence = bos + sentence # BOS+sentence with no leading space
         else:
             current_sentence = separator + sentence # space+sentence
+        
+        alignment_text.append(current_sentence)
 
         sentence_token_ids = tokenizer(current_sentence, add_special_tokens = False)['input_ids'] # Tokenize now to force alignment of space as leading rather than trailing
 
@@ -273,9 +276,12 @@ def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
         sent_surps = all_surprisals[current_surprisal_idx : current_surprisal_idx + n_tokens]
         current_surprisal_idx += n_tokens
 
+        current_metadata = sentence_metadata[i].copy()
+        current_metadata['alignment_text'] = alignment_text[i]
+
         result_tuple = (
             sentences[i],
-            sentence_metadata[i],
+            current_metadata,
             sent_surps
         )
 
@@ -320,19 +326,32 @@ def alignment(doc, tokenizer):
     Align LLaMa tokens to SpaCy tokens
     """
 
-    offsets = tokenizer(doc.text, return_offsets_mapping = True)['offset_mapping'][1:-1] # Gather start and end characters for each token, stripping special tokens
+    alignment_text = doc._.sentence_metadata.get('alignment_text', doc.text)
+
+    shift_amount = len(alignment_text) - len(doc.text)
+
+    offsets = tokenizer(alignment_text, return_offsets_mapping = True)['offset_mapping'] # Gather start and end characters for each token, stripping special tokens
 
     spacy_spans = [(tok.idx, tok.idx + len(tok), tok) for tok in doc] # Does the same for spacy; outputs (start, end, token)
 
     aligned, spacy_pointer = [], 0
     for llama_start, llama_end in offsets: # Loop through every LLaMa token
+
+        adj_start = llama_start - shift_amount
+        adj_end = llama_end - shift_amount
+
+        if adj_end <= 0:
+            aligned.append(None)
+            continue
+
+
         best_tok, best_iou = None, 0.0
 
         while spacy_pointer < len(spacy_spans) and spacy_spans[spacy_pointer][1] <= llama_start: # Prevents starting from the beginning multiple times
             spacy_pointer += 1
         for i in range(spacy_pointer, min(len(spacy_spans), spacy_pointer + 5)): # Look 4 tokens ahead of current
             spacy_start, spacy_end, spacy_tok = spacy_spans[i]
-            iou = compute_iou(llama_start, llama_end, spacy_start, spacy_end) # Calculates overlap between LLaMa and SpaCy
+            iou = compute_iou(adj_start, adj_end, spacy_start, spacy_end) # Calculates overlap between LLaMa and SpaCy
             if iou > best_iou: # Pick the best match
                 best_iou, best_tok = iou, spacy_tok
         aligned.append(best_tok)
