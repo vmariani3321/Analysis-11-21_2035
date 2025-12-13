@@ -1,7 +1,7 @@
 #########################################
 """
 VINCENT MARIANI
-11 DECEMBER 2025
+12 DECEMBER 2025
 
 Analysis script for QP 2; 
 Takes an XML corpus (in this case the BNC1994) and outputs CSV files with surprisal calculations and NLP characteristics.
@@ -33,7 +33,7 @@ from itertools import batched
 CSV_BATCH = 999999999 # The number of sentences to process before writing to the CSV file. Set to absurdly high number to process entire file at once
 
 WINDOW_LEN = 4 # The length of the sliding window 
-WINDOW_BATCH = 64 # The number of sliding windows to process at once
+WINDOW_BATCH = 32 # The number of sliding windows to process at once
 TOKEN_WARNING = 120000 # The number of tokens in a window to throw a warning
 
 SPACY_BATCH = 64
