@@ -184,6 +184,23 @@ def XML_tupler(filepath):
 
     return sentence_tuples
 
+####
+WINDOW = 4
+STEP = 1
+WINDOW_BATCH = 16
+
+
+def get_window(input_list, batch_num):
+    if len(input_list) <= WINDOW:
+        yield input_list
+    else:
+        for start_pos in range((batch_num + WINDOW), (len(input_list) - WINDOW + STEP), STEP):
+            batch_start = min(len(input_list) - 1, start_pos)
+            batch_end = min(len(input_list), start_pos + WINDOW)
+            yield input_list[batch_start:batch_end] # YIELDS A SENTENCE TUPLE IF INPUT IS LIST OF TUPLES
+
+
+
 
 
 

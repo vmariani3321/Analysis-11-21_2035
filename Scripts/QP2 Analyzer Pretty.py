@@ -222,21 +222,21 @@ def XML_tupler(filepath):
 
 ####
 
-def surprisal_calc_windowed(sentence_tuples, tokenizer, model, accelerator, batch_num):
+def get_window(input_list, batch_num):
+    if len(input_list) <= WINDOW:
+        yield input_list
+    else:
+        for start_pos in range((batch_num + WINDOW), (len(input_list) - WINDOW + STEP), STEP):
+            batch_start = min(len(input_list) - 1, start_pos)
+            batch_end = min(len(input_list), start_pos + WINDOW)
+            yield input_list[batch_start:batch_end] # YIELDS A SENTENCE TUPLE IF INPUT IS LIST OF TUPLES
+
+####
+
+def surprisal_calc(sentence_tuples, tokenizer, model, accelerator, batch_num):
     """
-    Calculates surprisal values for each token in the text using HuggingFace model. 
-        - Uses BATCH, CONTEXT, TOKEN_LIM, and TRANSFORMER_MOD config options. 
+    Uses sliding window approach to get surprisal values.
     """
-
-    sentences = [sent[0] for sent in sentence_tuples]
-    sentence_metadata = [sent[1] for sent in sentence_tuples]
-
-    batch_start = batch_num * BATCH
-    batch_end = min(((batch_num * BATCH) + BATCH), len(sentences))
-
-    batch_sentences = sentences[batch_start : batch_end]
-    batch_targets = []
-
 
 
 

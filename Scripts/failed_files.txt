@@ -1,0 +1,2 @@
+D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts\E\EB\EBS.xml - CUDA OOM 
+D:/BNC Full Data/BNCFiles/Full BNC1994/download/Texts\J\J6\J6R.xml - CUDA OOM 
